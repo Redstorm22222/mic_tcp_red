@@ -3,7 +3,8 @@
 #define SIZE 5
 
 int setId = 0;
- mic_tcp_sock globalSockets[SIZE]; 
+char PE = 0;
+mic_tcp_sock globalSockets[SIZE]; 
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
  * Retourne le descripteur du socket ou bien -1 en cas d'erreur
@@ -47,9 +48,16 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
     sockRecup.state = SYN_RECEIVED;
     mic_tcp_pdu pdu_syn_ack;
     pdu_syn_ack.header.source_port = sockRecup.remote_addr.port;
+    printf("1\n");
     pdu_syn_ack.header.dest_port = (*addr).port;
+    printf("2\n");
+
     pdu_syn_ack.header.syn = 1;
+    printf("3\n");
+
     pdu_syn_ack.header.ack = 1;
+    printf("4\n");
+
     IP_send(pdu_syn_ack, addr->ip_addr); */
     return 0;
 }
@@ -61,37 +69,43 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
 int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
-    globalSockets[socket].remote_addr = addr;
-    return 0;
+    /* mic_tcp_sock sockRecup = globalSockets[socket];
 
-    /*pdu_syn.header.dest_port = addr.port;
+    mic_tcp_pdu pdu_syn;
+    pdu_syn.header.dest_port = addr.port;
     pdu_syn.header.syn = 1;
 
-    IP_send(pdu_syn, addr.ip_addr);
+    while (sockRecup.state != ESTABLISHED){
 
-    mic_tcp_pdu pdu_recu;
+        IP_send(pdu_syn, addr.ip_addr);
 
-    IP_recv(&pdu_recu, &addr.ip_addr, &addr.ip_addr, 1000);
+        mic_tcp_pdu pdu_recu;
+        mic_tcp_ip_addr addr_recu_local;
+        mic_tcp_ip_addr addr_recu_remote;
 
-    if (pdu_recu.header.syn == 1 && pdu_recu.header.ack == 1){
+        int res = IP_recv(&pdu_recu, &addr_recu_local, &addr_recu_remote, 1000);
 
-        mic_tcp_pdu pdu_ack;
+        if (res != -1){
+            if (pdu_recu.header.syn == 1 && pdu_recu.header.ack == 1){
 
-        pdu_ack.header.source_port = sockRecup.remote_addr.port;
-        pdu_ack.header.dest_port = addr.port;
-        pdu_ack.header.ack = 1;
+                mic_tcp_pdu pdu_ack;
 
-        IP_send(pdu_ack, addr.ip_addr);
+                pdu_ack.header.source_port = sockRecup.remote_addr.port;
+                pdu_ack.header.dest_port = addr.port;
+                pdu_ack.header.ack = 1;
 
-        sockRecup.state = ESTABLISHED;
+                IP_send(pdu_ack, addr.ip_addr);
 
-        return 0;
+                sockRecup.state = ESTABLISHED;
 
-    } else {
+                return 0;
+            //reprise en cas de reception d'un nouveau synack
+            } 
+        } 
+    }*/
 
-        return -1;
-    } */
-
+    globalSockets[socket].remote_addr = addr;
+    return 0;
     
 }
 
@@ -113,7 +127,39 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
     pdu.payload.size = mesg_size;
     //Pas besoin du nul port local ou localhost
     pdu.header.dest_port = sockRecup.remote_addr.port;
-    int sent_data = IP_send(pdu, sockRecup.remote_addr.ip_addr);
+    pdu.header.seq_num = PE;
+
+    PE = (PE + 1) % 2;
+
+    sockRecup.state = WAIT_ACK;
+    int timeout = 1000;
+
+    int sent_data;
+
+    //TODO : Dans le test on ne sort pas de cette boucle, peut-être pb avec PE
+
+    while (sockRecup.state == WAIT_ACK){
+
+        sent_data = IP_send(pdu, sockRecup.remote_addr.ip_addr);
+        printf("oui %d \n", sent_data);
+        mic_tcp_pdu pdu_ACK;
+        pdu_ACK.payload.size = 0;
+        mic_tcp_ip_addr addr_recu_local;
+        mic_tcp_ip_addr addr_recu_remote;
+        printf("avant ip rcv \n");
+        int resultat = IP_recv(&pdu_ACK,&addr_recu_local,&addr_recu_remote,timeout);
+        printf("après ip rcv \n");
+
+        if (resultat == -1){
+            timeout = 1000;
+        } else if (pdu_ACK.header.ack == 1 && pdu_ACK.header.seq_num == PE){
+
+            sockRecup.state = ESTABLISHED;
+
+        }
+    }
+
+    
     return sent_data;
 }
 
@@ -129,7 +175,9 @@ int mic_tcp_recv (int socket, char* mesg, int max_mesg_size)
     mic_tcp_payload payload;
     payload.data = mesg;
     payload.size = max_mesg_size;
+    printf("dans ip rcv avant app_buffer_get\n");
     int effectivement_written = app_buffer_get(payload);
+    printf("dans ip rcv après app_buffer_get\n");
     return effectivement_written;
 }
 
@@ -142,7 +190,31 @@ int mic_tcp_close (int socket)
 {
     printf("[MIC-TCP] Appel de la fonction :  "); printf(__FUNCTION__); printf("\n");
     mic_tcp_sock sockRecup = globalSockets[socket];
-    sockRecup.state = CLOSED;
+
+    mic_tcp_pdu pdu_FIN;
+
+    pdu_FIN.header.dest_port = sockRecup.remote_addr.port;
+    pdu_FIN.header.fin = 1;
+    IP_send(pdu_FIN, sockRecup.remote_addr.ip_addr);
+
+    mic_tcp_pdu pdu_recu;
+
+    int timeout = 1000;
+
+    mic_tcp_ip_addr addr_recu_local;
+    mic_tcp_ip_addr addr_recu_remote;
+
+    if (IP_recv(&pdu_recu, &addr_recu_local, &addr_recu_remote, timeout)!= -1 && pdu_recu.header.ack == 1){
+
+        sockRecup.state = CLOSED;
+        return 0;
+
+    }else {
+
+        return -1;
+    }
+
+    
     
 }
 
@@ -155,6 +227,17 @@ int mic_tcp_close (int socket)
 void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_ip_addr remote_addr)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
-            app_buffer_put(pdu.payload);
+            
+    if (pdu.payload.size > 0 && pdu.header.seq_num == PE){
 
+        app_buffer_put(pdu.payload);
+        pdu.header.seq_num = (pdu.header.seq_num + 1) % 2;
+        mic_tcp_pdu pdu_ACK;
+        pdu_ACK.header.source_port = pdu.header.dest_port;
+        pdu_ACK.header.dest_port = pdu.header.source_port;
+        pdu_ACK.header.ack = 1;
+        pdu_ACK.header.seq_num = pdu.header.seq_num;
+
+        IP_send(pdu_ACK, remote_addr);
+    }
 }
