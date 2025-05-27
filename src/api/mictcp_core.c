@@ -160,12 +160,9 @@ int IP_recv(mic_tcp_pdu* pk, mic_tcp_ip_addr* local_addr, mic_tcp_ip_addr* remot
     if (result != -1) {
         /* Create the mic_tcp_pdu */
 
-        printf("avant memcopy \n");
         memcpy (&(pk->header), buffer, API_HD_Size);
         pk->payload.size = result - API_HD_Size;
         memcpy (pk->payload.data, buffer + API_HD_Size, pk->payload.size);
-
-        printf("après memcopy \n");
 
         /* Generate a stub address */
         if (remote_addr != NULL) {
@@ -173,8 +170,6 @@ int IP_recv(mic_tcp_pdu* pk, mic_tcp_ip_addr* local_addr, mic_tcp_ip_addr* remot
             remote_addr->addr = "localhost";
             remote_addr->addr_size = strlen(remote_addr->addr) + 1; // don't forget '\0'
         }
-
-        printf("après remote addr \n");
 
         if (local_addr != NULL) {
             local_addr->addr = "localhost";

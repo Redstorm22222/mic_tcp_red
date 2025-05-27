@@ -129,8 +129,6 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
     pdu.header.dest_port = sockRecup.remote_addr.port;
     pdu.header.seq_num = PE;
 
-    PE = (PE + 1) % 2;
-
     sockRecup.state = WAIT_ACK;
     int timeout = 1000;
 
@@ -141,20 +139,18 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
     while (sockRecup.state == WAIT_ACK){
 
         sent_data = IP_send(pdu, sockRecup.remote_addr.ip_addr);
-        printf("oui %d \n", sent_data);
         mic_tcp_pdu pdu_ACK;
         pdu_ACK.payload.size = 0;
         mic_tcp_ip_addr addr_recu_local;
         mic_tcp_ip_addr addr_recu_remote;
-        printf("avant ip rcv \n");
         int resultat = IP_recv(&pdu_ACK,&addr_recu_local,&addr_recu_remote,timeout);
-        printf("après ip rcv \n");
 
         if (resultat == -1){
             timeout = 1000;
         } else if (pdu_ACK.header.ack == 1 && pdu_ACK.header.seq_num == PE){
 
             sockRecup.state = ESTABLISHED;
+            PE = (PE + 1) % 2;
 
         }
     }
@@ -175,9 +171,7 @@ int mic_tcp_recv (int socket, char* mesg, int max_mesg_size)
     mic_tcp_payload payload;
     payload.data = mesg;
     payload.size = max_mesg_size;
-    printf("dans ip rcv avant app_buffer_get\n");
     int effectivement_written = app_buffer_get(payload);
-    printf("dans ip rcv après app_buffer_get\n");
     return effectivement_written;
 }
 
@@ -231,7 +225,7 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
     if (pdu.payload.size > 0 && pdu.header.seq_num == PE){
 
         app_buffer_put(pdu.payload);
-        pdu.header.seq_num = (pdu.header.seq_num + 1) % 2;
+        
         mic_tcp_pdu pdu_ACK;
         pdu_ACK.header.source_port = pdu.header.dest_port;
         pdu_ACK.header.dest_port = pdu.header.source_port;
@@ -239,5 +233,6 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
         pdu_ACK.header.seq_num = pdu.header.seq_num;
 
         IP_send(pdu_ACK, remote_addr);
+        PE = (PE + 1) % 2;
     }
 }
