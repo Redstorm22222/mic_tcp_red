@@ -1,10 +1,14 @@
 #include <mictcp.h>
 #include <api/mictcp_core.h>
 #define SIZE 5
+#define WINSIZE 10
+#define loss_rate 20.0
 
 int setId = 0;
 char PE = 0;
-mic_tcp_sock globalSockets[SIZE]; 
+mic_tcp_sock globalSockets[SIZE];
+int windex = 0;
+int window[WINSIZE];
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
  * Retourne le descripteur du socket ou bien -1 en cas d'erreur
@@ -14,7 +18,7 @@ int mic_tcp_socket(start_mode sm)
    int result = -1;
    printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
    result = initialize_components(sm); /* Appel obligatoire */
-   set_loss_rate(0);
+   set_loss_rate(loss_rate);
    mic_tcp_sock newSock;
    newSock.fd = setId;
    newSock.state = IDLE;
@@ -22,6 +26,14 @@ int mic_tcp_socket(start_mode sm)
    setId++;
 
    return newSock.fd;
+}
+
+void init_window(){
+    // 1 is for a send, 0 for a loss 
+    for (int i = 0; i<WINSIZE; i++){
+        window[i] = 0;
+    }
+
 }
 
 /*
@@ -103,7 +115,7 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
             } 
         } 
     }*/
-
+    init_window();
     globalSockets[socket].remote_addr = addr;
     return 0;
     
@@ -111,6 +123,27 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
 
 //remote = connect
 //local = bind
+
+
+char loss_allowed(){
+
+    int sum = 0;
+    for (int i = 0; i < WINSIZE; i++)
+    {
+        sum += window[i];
+    }
+    printf("sum = %d \n", sum);
+    sum = WINSIZE - sum;
+    printf("Nb Pertes = %d\n",sum);
+    float ratio = (float)sum / (float)WINSIZE;
+    printf("ratio = %f\n",ratio);
+
+    printf("Is the loss allowed ? : %d\n",ratio < loss_rate/100.0);
+
+    return (ratio < loss_rate/100.0);
+
+}
+
 
 /*
  * Permet de réclamer l’envoi d’une donnée applicative
@@ -130,30 +163,49 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
     pdu.header.seq_num = PE;
 
     sockRecup.state = WAIT_ACK;
-    int timeout = 1000;
+    int timeout = 500;
 
-    int sent_data;
+    printf("PE Send 1 : %d \n", PE);
 
-    //TODO : Dans le test on ne sort pas de cette boucle, peut-être pb avec PE
+    int sent_data = IP_send(pdu, sockRecup.remote_addr.ip_addr);
 
-    while (sockRecup.state == WAIT_ACK){
 
-        sent_data = IP_send(pdu, sockRecup.remote_addr.ip_addr);
-        mic_tcp_pdu pdu_ACK;
-        pdu_ACK.payload.size = 0;
-        mic_tcp_ip_addr addr_recu_local;
-        mic_tcp_ip_addr addr_recu_remote;
-        int resultat = IP_recv(&pdu_ACK,&addr_recu_local,&addr_recu_remote,timeout);
+    //PDU ACK creation
+    mic_tcp_pdu pdu_ACK;
+    pdu_ACK.payload.size = 0;
+    mic_tcp_ip_addr addr_recu_local;
+    mic_tcp_ip_addr addr_recu_remote;
 
-        if (resultat == -1){
-            timeout = 1000;
-        } else if (pdu_ACK.header.ack == 1 && pdu_ACK.header.seq_num == PE){
+    
 
-            sockRecup.state = ESTABLISHED;
-            PE = (PE + 1) % 2;
 
+    //sockRecup.state == WAIT_ACK
+    window[windex] = 1;
+
+    while (IP_recv(&pdu_ACK,&addr_recu_local,&addr_recu_remote,timeout) == -1 || pdu_ACK.header.ack != 1 || pdu_ACK.header.seq_num != PE){
+        if (loss_allowed()){
+                printf("La perte a été autorisée\n");
+                printf("renvoi du paquet\n");
+                printf("PE = %d, seq_num = %d" ,PE,pdu_ACK.header.seq_num);
+                PE = (PE + 1) % 2;
+                window[windex] = 0;
+                windex = (windex + 1) % WINSIZE;
+                return sent_data;
+
+            //windex = (windex + 1) % WINSIZE;
+            //sockRecup.state = ESTABLISHED;
+            
         }
-    }
+        
+        sent_data = IP_send(pdu, sockRecup.remote_addr.ip_addr);
+
+    }  
+    printf("Le paquet a été envoyé\n");
+    printf("windex = %d\n",windex);
+    window[windex] = 1;                
+    windex = (windex + 1) % WINSIZE;
+    PE = (PE + 1) % 2;
+    
 
     
     return sent_data;
@@ -222,6 +274,7 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
             
+    printf("PE = %d, seq_num = %d \n",PE,pdu.header.seq_num);
     if (pdu.payload.size > 0 && pdu.header.seq_num == PE){
 
         app_buffer_put(pdu.payload);
