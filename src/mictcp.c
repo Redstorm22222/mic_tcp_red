@@ -2,7 +2,9 @@
 #include <api/mictcp_core.h>
 #define SIZE 5
 #define WINSIZE 10
-#define loss_rate 50.0
+#define loss_rate 20.0
+#define loss_permitted 5.0
+
 
 int setId = 0;
 char PE = 0;
@@ -132,15 +134,9 @@ char loss_allowed(){
     {
         sum += window[i];
     }
-    printf("sum = %d \n", sum);
     sum = WINSIZE - sum;
-    printf("Nb Pertes = %d\n",sum);
     float ratio = (float)sum / (float)WINSIZE;
-    printf("ratio = %f\n",ratio);
-
-    printf("Is the loss allowed ? : %d\n",ratio < loss_rate/100.0);
-
-    return (ratio < loss_rate/100.0);
+    return (ratio < loss_permitted/100.0);
 
 }
 
@@ -159,16 +155,13 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
     pdu.payload.data = mesg;
     pdu.payload.size = mesg_size;
     //Pas besoin du nul port local ou localhost
+    pdu.header.ack = 0;
+    pdu.header.syn = 0;
     pdu.header.dest_port = sockRecup.remote_addr.port;
     pdu.header.seq_num = PE;
 
     sockRecup.state = WAIT_ACK;
-    int timeout = 500;
-
-    printf("PE Send 1 : %d \n", PE);
-
-    int sent_data = IP_send(pdu, sockRecup.remote_addr.ip_addr);
-
+    int timeout = 10;
 
     //PDU ACK creation
     mic_tcp_pdu pdu_ACK;
@@ -176,18 +169,52 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
     mic_tcp_ip_addr addr_recu_local;
     mic_tcp_ip_addr addr_recu_remote;
 
-    
+    int sent_data = IP_send(pdu, sockRecup.remote_addr.ip_addr);
+    windex = (windex + 1) % WINSIZE;
+    int recv = IP_recv(&pdu_ACK,&addr_recu_local,&addr_recu_remote,timeout);
 
+    printf("RECV : %d, ACK : %d, SYN : %d, ACK_NUM : %d  |  RECV != -1, ACK = 1, SYN = 0, ACK_NUM = PE = %d \n",recv,pdu_ACK.header.ack, pdu_ACK.header.syn,pdu_ACK.header.seq_num,PE);
 
-    //sockRecup.state == WAIT_ACK
+    if (recv != -1 && pdu_ACK.header.ack == 1 && pdu_ACK.header.syn == 0 && pdu_ACK.header.seq_num == PE){
+
+        printf("BIEN RECU, TOUT VA BIEN \n");
+        window[windex] = 1;
+
+    } else {
+
+        printf("PAS RECU, TOUT VA PAS BIEN \n");
+        printf("islossallowaded %d \n",loss_allowed());
+        window[windex] = 0;
+        if (!loss_allowed()){
+
+            while (1){
+
+                recv = IP_recv(&pdu_ACK,&addr_recu_local,&addr_recu_remote,timeout);
+                if (recv != -1 && pdu_ACK.header.ack == 1 && pdu_ACK.header.syn == 0 && pdu_ACK.header.seq_num == PE){
+
+                    break;
+
+                }
+                sent_data = IP_send(pdu, sockRecup.remote_addr.ip_addr);
+
+            }
+            window[windex] = 1;
+
+        }
+
+    }
+    PE = (PE + 1) % 2;
+    return sent_data;
+
+    /* //sockRecup.state == WAIT_ACK
     window[windex] = 1;
 
-    while (IP_recv(&pdu_ACK,&addr_recu_local,&addr_recu_remote,timeout) == -1 || pdu_ACK.header.ack != 1 || pdu_ACK.header.seq_num != PE){
+    while (IP_recv(&pdu_ACK,&addr_recu_local,&addr_recu_remote,timeout) != -1 && pdu_ACK.header.ack == 1 && pdu_ACK.header.ack_num == PE){
         
         if (loss_allowed()){
                 printf("La perte a été autorisée\n");
                 printf("renvoi du paquet\n");
-                printf("PE = %d, seq_num = %d" ,PE,pdu_ACK.header.seq_num);
+                printf("PE = %d, seq_num = %d",PE,pdu_ACK.header.ack_num);
                 window[windex] = 0;
                 windex = (windex + 1) % WINSIZE;
                 return sent_data;
@@ -207,7 +234,7 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
     
 
     
-    return sent_data;
+    return sent_data; */
 }
 
 /*
@@ -282,9 +309,20 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
         pdu_ACK.header.source_port = pdu.header.dest_port;
         pdu_ACK.header.dest_port = pdu.header.source_port;
         pdu_ACK.header.ack = 1;
+        pdu_ACK.header.syn = 0;
         pdu_ACK.header.seq_num = pdu.header.seq_num;
 
         IP_send(pdu_ACK, remote_addr);
         PE = (PE + 1) % 2;
+    } else {
+
+        mic_tcp_pdu pdu_ACK;
+        pdu_ACK.header.source_port = pdu.header.dest_port;
+        pdu_ACK.header.dest_port = pdu.header.source_port;
+        pdu_ACK.header.ack = 1;
+        pdu_ACK.header.syn = 0;
+        pdu_ACK.header.seq_num = pdu.header.seq_num;
+        IP_send(pdu_ACK, remote_addr);
+
     }
 }
