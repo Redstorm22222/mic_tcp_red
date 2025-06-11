@@ -2,7 +2,7 @@
 #include <api/mictcp_core.h>
 #define SIZE 5
 #define WINSIZE 10
-#define loss_rate 20.0
+#define loss_rate 50.0
 
 int setId = 0;
 char PE = 0;
@@ -183,11 +183,11 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
     window[windex] = 1;
 
     while (IP_recv(&pdu_ACK,&addr_recu_local,&addr_recu_remote,timeout) == -1 || pdu_ACK.header.ack != 1 || pdu_ACK.header.seq_num != PE){
+        
         if (loss_allowed()){
                 printf("La perte a été autorisée\n");
                 printf("renvoi du paquet\n");
                 printf("PE = %d, seq_num = %d" ,PE,pdu_ACK.header.seq_num);
-                PE = (PE + 1) % 2;
                 window[windex] = 0;
                 windex = (windex + 1) % WINSIZE;
                 return sent_data;
@@ -196,7 +196,6 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
             //sockRecup.state = ESTABLISHED;
             
         }
-        
         sent_data = IP_send(pdu, sockRecup.remote_addr.ip_addr);
 
     }  
@@ -273,8 +272,8 @@ int mic_tcp_close (int socket)
 void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_ip_addr remote_addr)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
-            
     printf("PE = %d, seq_num = %d \n",PE,pdu.header.seq_num);
+
     if (pdu.payload.size > 0 && pdu.header.seq_num == PE){
 
         app_buffer_put(pdu.payload);
